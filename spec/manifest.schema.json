@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/CraigHutchinson/Sub0LlmModelRegistry/spec/manifest.schema.json",
+  "title": "Sub0LlmModelRegistry version manifest",
+  "type": "object",
+  "required": ["id", "format", "files"],
+  "properties": {
+    "schema": {"const": "sub0llm-model-registry/manifest/1"},
+    "id": {"type": "string", "pattern": "^[^@#]+@[^@#/]+$", "description": "path from the registry root with @ before the version segment"},
+    "format": {"type": "string", "description": "gguf | safetensors | sub0llm | onnx | other; free text allowed for new formats"},
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "bytes"],
+        "properties": {
+          "name": {"type": "string", "description": "relative to the version folder, / or \\ separated"},
+          "bytes": {"type": "integer", "minimum": 0},
+          "sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+          "role": {"enum": ["model", "mmproj", "shard", "imatrix", "adapter", "tokenizer", "config", "other"]}
+        }
+      }
+    },
+    "source": {
+      "type": ["object", "null"],
+      "properties": {
+        "provider": {"type": "string"},
+        "kind": {"type": "string", "description": "legacy name of provider"},
+        "repo": {"type": ["string", "null"]},
+        "revision": {"type": ["string", "null"]},
+        "url": {"type": ["string", "null"]}
+      }
+    },
+    "derivedFrom": {"type": ["string", "null"], "description": "registry id of the version this was made from"},
+    "tool": {
+      "type": ["object", "null"],
+      "properties": {"name": {"type": "string"}, "commit": {"type": ["string", "null"]}, "command": {"type": ["string", "null"]}}
+    },
+    "created": {"type": "string"},
+    "facts": {"type": ["object", "null"], "description": "read from the files; see the reference tool's gguf facts"},
+    "notes": {"type": "string"}
+  }
+}
