@@ -37,6 +37,11 @@
       "properties": {"name": {"type": "string"}, "commit": {"type": ["string", "null"]}, "command": {"type": ["string", "null"]}}
     },
     "created": {"type": "string"},
+    "evicted": {
+      "type": ["object", "null"],
+      "description": "set while the files are deleted from this machine to save space; restore fetches them from source",
+      "properties": {"at": {"type": "string"}, "bytes": {"type": "integer", "minimum": 0}}
+    },
     "facts": {"type": ["object", "null"], "description": "read from the files; see the reference tool's gguf facts"},
     "notes": {"type": "string"}
   }

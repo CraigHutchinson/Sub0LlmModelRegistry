@@ -71,3 +71,11 @@ class HuggingFace(Provider):
         o.headers = self.headers()
         o.pinned = bool(info.get("sha"))
         return o
+
+    def refetch(self, manifest):
+        src = manifest.get("source") or {}
+        if not src.get("repo"):
+            raise SystemExit("hf: %s records no source repo" % manifest["id"])
+        rev = src.get("revision") or "main"  # unpinned: whatever main serves now, accepted only if every sha256 matches
+        return [{"name": f["name"], "bytes": f["bytes"], "sha256": f.get("sha256"),
+                 "url": "%s/%s/resolve/%s/%s" % (API, src["repo"], rev, urllib.parse.quote(f["name"]))} for f in manifest["files"]]

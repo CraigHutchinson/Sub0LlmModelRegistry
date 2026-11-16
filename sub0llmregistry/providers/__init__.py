@@ -43,6 +43,11 @@ class Provider:
         """spec -> Offer. Reads the provider's index only; downloads nothing."""
         raise NotImplementedError
 
+    def refetch(self, manifest):
+        """A manifest this provider wrote -> its files again: [{"name", "url", "bytes", "sha256"}]. Providers that implement
+        this let the registry evict their versions (cache.py) and restore them on request."""
+        raise NotImplementedError
+
 
 def available():
     from . import hf, url
@@ -153,6 +158,80 @@ def fetch(reg, offer, say=print):
     return m
 
 
+def confirm(say=print, question="download? [y/N] "):
+    if not sys.stdin.isatty():
+        say("not downloading: confirm with --yes (or run interactively)")
+        return False
+    try:
+        answer = input(question)
+    except EOFError:
+        answer = ""
+    return answer.strip().lower() in ("y", "yes")
+
+
+def adopt(reg, src, source, alias=None, link=True, hashFiles=True, say=print):
+    """Move an existing download (a folder, or a single file) into the registry as the version a provider names.
+
+    Every offered file must be present in `src` with the provider's size, and (unless hashFiles is False, for files already
+    checked) its sha256. The files are moved (a rename on the same drive), `src` is replaced by a symbolic link to the
+    version folder (link=False: removed when empty), and MIGRATION.log gets a line."""
+    import datetime
+    from ..store import MANIFEST, SCHEMA, roleOf, sha256
+    name, _, spec = source.partition(":")
+    offer = get(name).offer(spec)
+    src = os.path.abspath(src)
+    srcDir = src if os.path.isdir(src) else os.path.dirname(src)
+    final = os.path.join(reg.root, *offer.folder.split("/"))
+    if os.path.exists(os.path.join(final, MANIFEST)):
+        raise SystemExit("already in the registry: %s" % reg.idFor(final))
+    files = []
+    for f in offer.files:
+        p = os.path.join(srcDir, *f["name"].split("/"))
+        if not os.path.isfile(p):
+            raise SystemExit("adopt: %s is not in %s" % (f["name"], srcDir))
+        if f.get("bytes") and os.path.getsize(p) != f["bytes"]:
+            raise SystemExit("adopt: %s is %d bytes, %s publishes %d" % (f["name"], os.path.getsize(p), name, f["bytes"]))
+        digest = f.get("sha256")
+        if hashFiles or not digest:
+            say("hashing %s" % f["name"])
+            digest = sha256(p)
+            if f.get("sha256") and digest != f["sha256"]:
+                raise SystemExit("adopt: %s sha256 differs from %s's (not adopted)" % (f["name"], name))
+        files.append({"name": f["name"], "bytes": os.path.getsize(p), "sha256": digest, "role": f.get("role") or roleOf(f["name"])})
+    os.makedirs(final, exist_ok=True)
+    for f in files:
+        dst = os.path.join(final, *f["name"].split("/"))
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.move(os.path.join(srcDir, *f["name"].split("/")), dst)
+    m = {"schema": SCHEMA, "id": reg.idFor(final), "format": offer.format, "files": sorted(files, key=lambda x: x["name"]),
+         "source": offer.source, "derivedFrom": None, "tool": None, "created": datetime.date.today().isoformat(),
+         "notes": "adopted from %s" % srcDir}
+    reg.writeManifest(final, m)
+    linked = False
+    if not os.listdir(srcDir):
+        os.rmdir(srcDir)
+        if link:
+            try:
+                os.symlink(os.path.relpath(final, os.path.dirname(srcDir)), srcDir, target_is_directory=True)  # relative: survives remounts
+                linked = True
+            except OSError as e:
+                say("no link left at %s: %s" % (srcDir, e))
+    else:
+        say("%s still holds other files; left in place without a link" % srcDir)
+    with open(os.path.join(reg.root, "MIGRATION.log"), "a", encoding="utf-8", newline="\n") as log:
+        log.write("%s\t%s\t-> %s%s\n" % (datetime.datetime.now().isoformat(timespec="seconds"), srcDir, m["id"],
+                                          "\t(link left)" if linked else ""))
+    try:
+        reg.scanFacts(m["id"], say=say)
+    except Exception as e:
+        say("facts not read: %s" % e)
+    if alias:
+        reg.setAlias(alias, m["id"])
+    reg.index()
+    say("adopted %s" % m["id"])
+    return m
+
+
 def fetchCli(reg, source, yes=False, alias=None, say=print):
     name, _, spec = source.partition(":")
     if not spec:
@@ -162,6 +241,13 @@ def fetchCli(reg, source, yes=False, alias=None, say=print):
     final = os.path.join(reg.root, *offer.folder.split("/"))
     if os.path.exists(os.path.join(final, MANIFEST)):
         rid = reg.idFor(final)
+        if reg.get(rid).get("evicted"):
+            from ..cache import restore
+            restore(reg, rid, yes=yes, say=say)
+            if alias:
+                reg.setAlias(alias, rid)
+            reg.index()
+            return 0
         have = {f["name"] for f in reg.get(rid)["files"]}
         wanted = [f["name"] for f in offer.files]
         offer.files = [f for f in offer.files if f["name"] not in have]
@@ -178,18 +264,16 @@ def fetchCli(reg, source, yes=False, alias=None, say=print):
         say("  %-64s %s%s" % (f["name"], "%.2f GiB" % (f["bytes"] / 2 ** 30) if f.get("bytes") else "size unknown",
                               "" if f.get("sha256") else "  (no published sha256)"))
     say("total %.2f GiB from %s" % (total / 2 ** 30, offer.source.get("url") or offer.source.get("repo")))
-    if not yes:
-        if not sys.stdin.isatty():
-            say("not downloading: confirm with --yes (or run interactively)")
-            return 2
-        try:
-            answer = input("download? [y/N] ")
-        except EOFError:
-            answer = ""
-        if answer.strip().lower() not in ("y", "yes"):
-            say("cancelled")
-            return 1
+    if not yes and not confirm(say):
+        say("cancelled")
+        return 1 if sys.stdin.isatty() else 2
+    from ..cache import config, evict, plan, touch
+    cfg = config(reg)
+    if cfg.get("autoEvict"):
+        for c in plan(reg, cfg=cfg, incoming=total):
+            evict(reg, c[0], say)
     m = fetch(reg, offer, say)
+    touch(reg, m["id"])
     try:
         reg.scanFacts(m["id"], say=say)
     except Exception as e:

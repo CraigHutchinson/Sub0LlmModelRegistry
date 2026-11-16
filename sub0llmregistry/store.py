@@ -11,8 +11,21 @@ SKIP_DIRS = {"_incoming", ".git"}
 SPLIT = re.compile(r"-(\d{5})-of-(\d{5})\.gguf$")
 
 
+def userConfigPath():
+    base = os.environ.get("APPDATA") if os.name == "nt" else os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    return os.path.join(base or os.path.expanduser("~"), "sub0llmregistry", "config.json")
+
+
 def defaultRoot():
+    """$SUB0_MODEL_REGISTRY, else "root" in the user config (~/.config/sub0llmregistry/config.json, %APPDATA% on Windows),
+    else D:/LlmModels (/mnt/d/LlmModels under WSL)."""
     r = os.environ.get("SUB0_MODEL_REGISTRY", "")
+    if not r:
+        try:
+            with open(userConfigPath(), encoding="utf-8-sig") as f:
+                r = json.load(f).get("root") or ""
+        except (OSError, ValueError):
+            pass
     if not r:
         r = "D:/LlmModels" if os.name == "nt" else "/mnt/d/LlmModels"
     if os.name != "nt" and re.match(r"^[A-Za-z]:[\\/]", r):  # a Windows path seen from WSL
@@ -36,6 +49,19 @@ def roleOf(name):
     if n.endswith(".json"):
         return "config"
     return "other"
+
+
+class Evicted(LookupError):
+    """The version's files were evicted from this machine (its manifest remains); restore them to use it."""
+
+    def __init__(self, rid):
+        LookupError.__init__(self, "%s was evicted from this machine; restore it with: python -m sub0llmregistry restore %s"
+                             % (rid, rid))
+        self.id = rid
+
+
+def filePath(reg, m, name):
+    return os.path.join(reg.root, *m["path"].split("/"), *re.split(r"[\\/]", name))
 
 
 class Registry:
@@ -85,12 +111,22 @@ class Registry:
         m["path"] = os.path.relpath(folder, self.root).replace("\\", "/")
         return m
 
-    def resolve(self, ref):
-        """An alias, id or id#file -> (absolute file or folder path, full id). See spec 'Ids' for the main-file rule."""
+    def resolve(self, ref, restore=None, track=True, say=print):
+        """An alias, id or id#file -> (absolute file or folder path, full id). See spec 'Ids' for the main-file rule.
+
+        Records the use in usage.json (`track`). An evicted version raises Evicted unless `restore` (default: config.json
+        cache.autoRestore) is true, in which case its files are fetched again first."""
+        from . import cache
         al = self.aliases()
         rid = al.get(ref, ref)
         base, _, fname = rid.partition("#")
         m = self.get(base)
+        if m.get("evicted"):
+            if not (restore if restore is not None else cache.config(self).get("autoRestore")):
+                raise Evicted(base)
+            m = cache.restore(self, base, yes=True, track=False, say=say)
+        if track:
+            cache.touch(self, base)
         folder = os.path.join(self.root, *m["path"].split("/"))
         if not fname:
             models = [f["name"] for f in m["files"] if (f.get("role") or roleOf(f["name"])) == "model"]
@@ -182,6 +218,13 @@ class Registry:
         with open(os.path.join(self.root, "registry.json"), "w", encoding="utf-8", newline="\n") as f:
             json.dump(out, f, indent=1)
             f.write("\n")
+        readme = os.path.join(self.root, "README.md")
+        if not os.path.exists(readme):
+            with open(readme, "w", encoding="utf-8", newline="\n") as f:
+                f.write("# Model registry\n\nThis folder is a Sub0LlmModelRegistry (format in FORMAT.json): "
+                        "https://github.com/CraigHutchinson/Sub0LlmModelRegistry\n\nRefer to models by alias or id, never by path:\n\n"
+                        "    python -m sub0llmregistry list\n    python -m sub0llmregistry resolve <alias>\n\n"
+                        "Versions marked evicted keep their manifest; `restore` fetches their files again.\n")
         marker = os.path.join(self.root, "FORMAT.json")
         if not os.path.exists(marker):
             with open(marker, "w", encoding="utf-8", newline="\n") as f:
@@ -194,6 +237,8 @@ class Registry:
         problems = 0
         for m in self.manifests():
             folder = os.path.join(self.root, *m["path"].split("/"))
+            if m.get("evicted"):
+                continue  # files deliberately absent; restore checks every sha256
             changed = False
             for f in m["files"]:
                 p = os.path.join(folder, *re.split(r"[\\/]", f["name"]))
@@ -222,7 +267,7 @@ class Registry:
         from . import gguf
         n = 0
         for m in ([self.get(rid)] if rid else self.manifests()):
-            if m.get("facts") and not force:
+            if (m.get("facts") and not force) or m.get("evicted"):
                 continue
             folder = os.path.join(self.root, *m["path"].split("/"))
             names = [f["name"] for f in m["files"] if f["name"].lower().endswith(".gguf") and (f.get("role") or roleOf(f["name"])) in ("model", "shard")]
@@ -249,10 +294,21 @@ class Registry:
 
 def sha256(path, chunk=1 << 22):
     h = hashlib.sha256()
-    with open(path, "rb") as f:
+    with openNoAtime(path) as f:
         while True:
             b = f.read(chunk)
             if not b:
                 break
             h.update(b)
     return h.hexdigest()
+
+
+def openNoAtime(path):
+    """Open for reading without updating the access time where the OS allows it (hashing is not a use of the model)."""
+    flag = getattr(os, "O_NOATIME", 0)
+    if flag:
+        try:
+            return os.fdopen(os.open(path, os.O_RDONLY | flag), "rb")
+        except OSError:
+            pass
+    return open(path, "rb")

@@ -33,8 +33,9 @@ python -m sub0llmregistry index                     # regenerate registry.json a
 python -m sub0llmregistry new-manifest D:/LlmModels/local/mymodel/q4/20261116 --format gguf
 ```
 
-The root is `--root`, else `$SUB0_MODEL_REGISTRY`, else `D:/LlmModels` (`/mnt/d/LlmModels` under WSL; a Windows path in
-the variable is translated).
+The root is `--root`, else `$SUB0_MODEL_REGISTRY`, else `"root"` in the user config (`~/.config/sub0llmregistry/config.json`,
+`%APPDATA%\sub0llmregistry\config.json` on Windows), else `D:/LlmModels` (`/mnt/d/LlmModels` under WSL; a Windows path
+in the variable is translated).
 
 From Python:
 
@@ -52,6 +53,34 @@ moe = reg.query(moe=True, maxBytes=20 * 2**30)
 before measuring anything: layer count, KV layers and KV bytes per token (F16 and q8_0), expert count and experts used,
 expert bytes per layer (with the per-layer list, so llama.cpp's `--n-cpu-moe N` VRAM is
 `nonExpertBytes + sum(expertBytesByLayer[N:])` plus buffers), training context, architecture and quantization.
+
+## Disk use: evicting and restoring
+
+Downloads that have not been used for a while can be evicted: their files are deleted, the folder and manifest (source,
+hashes, facts) stay, and the next request fetches them again, checked byte for byte against the recorded sha256. What we
+made ourselves (`local/`, `sub0llm/`) is never evicted. Policy lives in `<root>/config.json` (spec: "Disk use").
+
+```bash
+python -m sub0llmregistry status                     # on disk, free, policy, versions least recently used first
+python -m sub0llmregistry evict --max-gib 200 --dry-run   # what the policy would evict
+python -m sub0llmregistry evict --idle-days 30 --yes      # evict everything unused for 30 days
+python -m sub0llmregistry evict qwen3-8b             # one version, now
+python -m sub0llmregistry restore qwen3-8b           # fetch it back (asks; --yes)
+python -m sub0llmregistry resolve qwen3-8b --restore # resolve, fetching first if evicted (exit 3 without --restore)
+```
+
+`resolve` records each use in `usage.json`; `Registry.resolve(ref, restore=True)` does the same from Python and raises
+`Evicted` when the files are gone and restoring was not asked for (or allowed by `cache.autoRestore`). A scheduled
+`evict --yes` (cron, systemd timer, Task Scheduler) keeps the drive within the policy.
+
+## Moving existing downloads in
+
+```bash
+python -m sub0llmregistry adopt /old/Qwen3-8B-GGUF hf:unsloth/Qwen3-8B-GGUF#Qwen3-8B-Q4_K_M.gguf --alias qwen3-8b
+```
+
+checks every file's size and sha256 against the provider (`--no-hash` when already checked), moves it into its pinned
+version folder, leaves a symbolic link at the old path and logs the move in `MIGRATION.log`.
 
 ## Fetching models
 

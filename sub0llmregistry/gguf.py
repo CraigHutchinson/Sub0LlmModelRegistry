@@ -61,7 +61,8 @@ class _Reader:
 
 def read(path):
     """{"version", "metadata": {key: value}, "tensors": [{"name", "shape", "type", "bytes"}]} of one GGUF file."""
-    with open(path, "rb") as f:
+    from .store import openNoAtime
+    with openNoAtime(path) as f:
         r = _Reader(f)
         if f.read(4) != b"GGUF":
             raise ValueError("not a GGUF file: %s" % path)

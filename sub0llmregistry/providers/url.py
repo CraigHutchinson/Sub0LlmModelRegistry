@@ -33,3 +33,10 @@ class Url(Provider):
         return Offer("url/%s/%s/%s" % (u.hostname, stem, datetime.date.today().strftime("%Y%m%d")),
                      [{"name": name, "url": link, "bytes": size, "sha256": sha.group(1).lower() if sha else None}],
                      {"provider": "url", "repo": None, "revision": None, "url": link}, fmt=fmt)
+
+    def refetch(self, manifest):
+        link = (manifest.get("source") or {}).get("url")
+        if not link or len(manifest["files"]) != 1:
+            raise SystemExit("url: %s cannot be fetched again (needs one file and its source url)" % manifest["id"])
+        f = manifest["files"][0]
+        return [{"name": f["name"], "bytes": f["bytes"], "sha256": f.get("sha256"), "url": link}]
