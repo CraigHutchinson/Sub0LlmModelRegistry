@@ -5,6 +5,8 @@ import json
 import os
 import re
 
+from . import platform
+
 MANIFEST = "MANIFEST.json"
 SCHEMA = "sub0llm-model-registry/manifest/1"
 SKIP_DIRS = {"_incoming", ".git"}
@@ -12,8 +14,7 @@ SPLIT = re.compile(r"-(\d{5})-of-(\d{5})\.gguf$")
 
 
 def userConfigPath():
-    base = os.environ.get("APPDATA") if os.name == "nt" else os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
-    return os.path.join(base or os.path.expanduser("~"), "sub0llmregistry", "config.json")
+    return os.path.join(platform.dirs.config("sub0llmregistry"), "config.json")
 
 
 def defaultRoot():
@@ -27,10 +28,8 @@ def defaultRoot():
         except (OSError, ValueError):
             pass
     if not r:
-        r = "D:/LlmModels" if os.name == "nt" else "/mnt/d/LlmModels"
-    if os.name != "nt" and re.match(r"^[A-Za-z]:[\\/]", r):  # a Windows path seen from WSL
-        r = "/mnt/" + r[0].lower() + "/" + r[3:].replace("\\", "/")
-    return r
+        r = "D:/LlmModels"
+    return platform.paths.local(r)  # D:/x is /mnt/d/x under WSL; /mnt/d/x is D:/x on Windows
 
 
 def roleOf(name):
@@ -164,11 +163,9 @@ class Registry:
     # ---- writing ---------------------------------------------------------------------------------------------------------------
     def writeManifest(self, folder, m):
         m = {k: v for k, v in m.items() if k != "path"}
-        tmp = os.path.join(folder, MANIFEST + ".tmp")
-        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
-            json.dump(m, f, indent=2)
-            f.write("\n")
-        os.replace(tmp, os.path.join(folder, MANIFEST))
+        path = os.path.join(folder, MANIFEST)
+        if not platform.fs.atomicWrite(path, json.dumps(m, indent=2) + "\n"):
+            raise OSError("%s is held open by another process; not rewritten" % path)
 
     def newManifest(self, folder, fmt="unknown", source=None, derivedFrom=None, tool=None, notes=""):
         folder = os.path.abspath(folder)

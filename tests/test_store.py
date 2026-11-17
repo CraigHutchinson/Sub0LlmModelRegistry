@@ -88,5 +88,23 @@ class Store(unittest.TestCase):
         self.assertEqual(len(r["tensors"]), 4)
 
 
+class Platform(unittest.TestCase):
+    """The user config and default root come from Sub0Platform: per-user config dir, drive paths mapped for WSL."""
+
+    def test_default_root_from_environment_is_localised(self):
+        from unittest import mock
+        from sub0llmregistry import platform, store
+        with mock.patch.dict(os.environ, {"SUB0_MODEL_REGISTRY": "D:/LlmModels"}):
+            self.assertEqual(store.defaultRoot(), platform.paths.local("D:/LlmModels"))
+        self.assertTrue(store.userConfigPath().endswith(os.path.join("sub0llmregistry", "config.json")))
+
+    def test_manifest_write_leaves_no_temporary_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            Registry(d).writeManifest(d, {"schema": "x", "path": "ignored"})
+            self.assertEqual(os.listdir(d), ["MANIFEST.json"])
+            with open(os.path.join(d, "MANIFEST.json"), encoding="utf-8") as f:
+                self.assertEqual(json.load(f), {"schema": "x"})
+
+
 if __name__ == "__main__":
     unittest.main()

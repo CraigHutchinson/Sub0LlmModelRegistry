@@ -7,7 +7,9 @@ and never by path.
 
 * **The format**: [spec/LAYOUT.md](spec/LAYOUT.md) and [spec/manifest.schema.json](spec/manifest.schema.json). Plain
   folders and JSON, so any language can read it; `registry.json` is a generated index for readers that do no more.
-* **The reference tool**: the `sub0llmregistry` Python package (standard library only), a CLI over the same.
+* **The reference tool**: the `sub0llmregistry` Python package (standard library plus
+  [Sub0Platform](https://github.com/CraigHutchinson/Sub0Platform), the shared platform layer, which `pip install` pulls
+  in and a clone beside this repository also satisfies), a CLI over the same; tested on Windows and Linux.
 * **Providers**: plugins that fetch models into the registry (Hugging Face and plain https built in; more by entry point).
 
 ```

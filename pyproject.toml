@@ -9,7 +9,7 @@ description = "A versioned, manifest-described folder of LLM weights, with provi
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
-dependencies = []
+dependencies = ["sub0platform @ git+https://github.com/CraigHutchinson/Sub0Platform@v0.1.0"]
 
 [project.scripts]
 sub0llmregistry = "sub0llmregistry.__main__:main"

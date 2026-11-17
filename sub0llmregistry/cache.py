@@ -14,6 +14,8 @@ import re
 import shutil
 import time
 
+from . import platform
+
 USAGE = "usage.json"
 CONFIG = "config.json"
 DEFAULTS = {"maxBytes": None, "minFreeBytes": None, "minIdleDays": 14, "keep": [], "autoRestore": False, "autoEvict": False}
@@ -50,11 +52,7 @@ def touch(reg, rid):
         e = u.setdefault(rid, {})
         e["lastUsed"] = now()
         e["uses"] = e.get("uses", 0) + 1
-        tmp = os.path.join(reg.root, "%s.%d.tmp" % (USAGE, os.getpid()))
-        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
-            json.dump(dict(sorted(u.items())), f, indent=1)
-            f.write("\n")
-        os.replace(tmp, os.path.join(reg.root, USAGE))
+        platform.fs.atomicWrite(os.path.join(reg.root, USAGE), json.dumps(dict(sorted(u.items())), indent=1) + "\n")
     except OSError:
         pass
 
